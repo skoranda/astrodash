@@ -142,14 +142,15 @@
   if (isUserQuery) {
     try {
       const resp = await fetch(TWINS_SEARCH_URL + "?k=50", { credentials: "same-origin" });
-      if (resp.ok) {
-        userQueryResult = await resp.json();
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && !data.error) {
+        userQueryResult = data;
       } else {
-        const err = await resp.json().catch(() => ({}));
-        console.warn("Twins search failed:", resp.status, err);
+        userQueryResult = { error: data.error || "Twins search failed." };
       }
     } catch (e) {
       console.warn("Twins search request failed:", e);
+      userQueryResult = { error: "Request failed. Classify a spectrum with DASH first." };
     }
   }
 
@@ -334,7 +335,7 @@ function specLayout() {
 
 Plotly.newPlot("specplot", [], specLayout(), {responsive: true});
 
-// ----------------- UI state -----------------
+// UI state
 
 let targetIdx = null;
 
@@ -526,7 +527,7 @@ function renderTwins() {
   updateSpectraPlot(kept.map(o => o.j));
 }
 
-// ----------------- dropdowns (GROUPED) -----------------
+// dropdowns (GROUPED)
 
 function populateNameDropdown() {
   const gids = Object.keys(group2idxs).sort();
@@ -615,7 +616,7 @@ projBtn.addEventListener("click", () => {
   layout = makeLayout();
 
   Plotly.react("plot", [...traces, twinsTrace, targetTrace], layout, {responsive: true})
-    .then(() => { hookPlotClick(); if (userQueryResult) renderUserQueryMode(); else renderTwins(); });
+    .then(() => { hookPlotClick(); if (userQueryResult && !userQueryResult.error) renderUserQueryMode(); else renderTwins(); });
 });
 
 // plot click
@@ -635,7 +636,7 @@ populateObsDropdown("", null);
 clearSpectra("No target");
 
 function renderUserQueryMode() {
-  if (!userQueryResult) return;
+  if (!userQueryResult || userQueryResult.error) return;
   const {x, y} = getXY();
   const qUmap = userQueryResult.query_umap || [];
   const qPca = userQueryResult.query_pca || [];
@@ -666,7 +667,7 @@ function renderUserQueryMode() {
   Plotly.react("specplot", specTraces.length ? specTraces : [], specLayout(), {responsive: true});
 }
 
-if (userQueryResult) {
+if (userQueryResult && !userQueryResult.error) {
   renderUserQueryMode();
 } else if (isUserQuery) {
   const banner = document.querySelector(".banner");
@@ -675,7 +676,7 @@ if (userQueryResult) {
     msg.style.gridColumn = "1 / -1";
     msg.style.color = "#c00";
     msg.style.fontSize = "13px";
-    msg.textContent = "Classify a spectrum with DASH first to see your point and twins here.";
+    msg.textContent = userQueryResult && userQueryResult.error ? userQueryResult.error : "Classify a spectrum with DASH first to see your point and twins here.";
     banner.appendChild(msg);
   }
 }

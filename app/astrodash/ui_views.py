@@ -579,8 +579,6 @@ def batch_process(request):
         return HttpResponseRedirect(reverse('astrodash:model_selection') + '?action=batch')
 
     form = BatchForm(request.POST or None, request.FILES or None)
-    # Set the model from session
-    form.fields['model'].initial = selected_model_type if selected_model_type != 'user_uploaded' else 'dash'
     context = {'form': form}
 
     if request.method == 'POST':
@@ -595,73 +593,74 @@ def batch_process(request):
         files = request.FILES.getlist('files')
 
         if form.is_valid():
-            try:
-                # Use model from session, not form
-                model_type = selected_model_type
-                if model_type == 'user_uploaded':
-                    model_type = 'user_uploaded'
+            # Transformer requires redshift when known_z is not set
+            if selected_model_type == 'transformer' and form.cleaned_data.get('redshift') is None:
+                form.add_error('redshift', "Redshift is required for Transformer model.")
+            else:
+                try:
+                    model_type = selected_model_type
 
-                # Prepare params
-                params = {
-                    'smoothing': form.cleaned_data['smoothing'],
-                    'minWave': form.cleaned_data['min_wave'],
-                    'maxWave': form.cleaned_data['max_wave'],
-                    'knownZ': form.cleaned_data['known_z'],
-                    'zValue': form.cleaned_data['redshift'],
-                    'calculateRlap': form.cleaned_data['calculate_rlap'],
-                    'modelType': model_type if model_type != 'user_uploaded' else 'dash',  # Fallback for display
-                }
+                    # Prepare params
+                    params = {
+                        'smoothing': form.cleaned_data['smoothing'],
+                        'minWave': form.cleaned_data['min_wave'],
+                        'maxWave': form.cleaned_data['max_wave'],
+                        'knownZ': form.cleaned_data['known_z'],
+                        'zValue': form.cleaned_data['redshift'],
+                        'calculateRlap': form.cleaned_data['calculate_rlap'],
+                        'modelType': model_type if model_type != 'user_uploaded' else 'dash',  # Fallback for display
+                    }
 
-                logger.info(
-                    "Batch UI parameters: smoothing=%s, minWave=%s, maxWave=%s, knownZ=%s, zValue=%s, calculateRlap=%s, modelType=%s",
-                    params['smoothing'],
-                    params['minWave'],
-                    params['maxWave'],
-                    params['knownZ'],
-                    params['zValue'],
-                    params['calculateRlap'],
-                    params['modelType'],
-                )
+                    logger.info(
+                        "Batch UI parameters: smoothing=%s, minWave=%s, maxWave=%s, knownZ=%s, zValue=%s, calculateRlap=%s, modelType=%s",
+                        params['smoothing'],
+                        params['minWave'],
+                        params['maxWave'],
+                        params['knownZ'],
+                        params['zValue'],
+                        params['calculateRlap'],
+                        params['modelType'],
+                    )
 
-                batch_service = get_batch_processing_service()
+                    batch_service = get_batch_processing_service()
 
-                zip_file = form.cleaned_data.get('zip_file')
+                    zip_file = form.cleaned_data.get('zip_file')
 
-                results = {}
+                    results = {}
 
-                files_to_process = None
-                if zip_file:
-                    files_to_process = zip_file
-                elif files:
-                    files_to_process = files
-                else:
-                    messages.error(request, "Please upload a ZIP file or select multiple files.")
-                    return render(request, 'astrodash/batch.html', context)
+                    files_to_process = None
+                    if zip_file:
+                        files_to_process = zip_file
+                    elif files:
+                        files_to_process = files
+                    else:
+                        messages.error(request, "Please upload a ZIP file or select multiple files.")
+                        return render(request, 'astrodash/batch.html', context)
 
-                if isinstance(files_to_process, list):
-                    logger.info("Batch UI will process %d individual files", len(files_to_process))
-                else:
-                    logger.info("Batch UI will process ZIP file: %s", getattr(files_to_process, "name", "unknown"))
+                    if isinstance(files_to_process, list):
+                        logger.info("Batch UI will process %d individual files", len(files_to_process))
+                    else:
+                        logger.info("Batch UI will process ZIP file: %s", getattr(files_to_process, "name", "unknown"))
 
-                results = async_to_sync(batch_service.process_batch)(
-                    files=files_to_process,
-                    params=params,
-                    model_type=model_type,
-                    model_id=selected_model_id
-                )
+                    results = async_to_sync(batch_service.process_batch)(
+                        files=files_to_process,
+                        params=params,
+                        model_type=model_type,
+                        model_id=selected_model_id
+                    )
 
-                # Format results for template
-                formatted_results = _format_batch_results(results, params)
-                logger.info("Batch UI processing completed successfully for %d items", len(formatted_results))
-                context['results'] = formatted_results
-                context['success'] = True
+                    # Format results for template
+                    formatted_results = _format_batch_results(results, params)
+                    logger.info("Batch UI processing completed successfully for %d items", len(formatted_results))
+                    context['results'] = formatted_results
+                    context['success'] = True
 
-            except AppException as e:
-                logger.error("Batch UI processing failed with AppException: %s", e.message)
-                messages.error(request, f"Batch Processing Error: {e.message}")
-            except Exception as e:
-                logger.error("Batch UI processing failed with unexpected error", exc_info=True)
-                messages.error(request, f"An unexpected error occurred during batch processing: {str(e)}")
+                except AppException as e:
+                    logger.error("Batch UI processing failed with AppException: %s", e.message)
+                    messages.error(request, f"Batch Processing Error: {e.message}")
+                except Exception as e:
+                    logger.error("Batch UI processing failed with unexpected error", exc_info=True)
+                    messages.error(request, f"An unexpected error occurred during batch processing: {str(e)}")
 
     return render(request, 'astrodash/batch.html', context)
 
