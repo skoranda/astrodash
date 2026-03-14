@@ -1,5 +1,29 @@
 [
   {
+    "path": "explorer/dash_twins_embeddings.npy",
+    "version_id": "alzVOKhe8vKa3B-tGx9CMZmA59zwN9J",
+    "etag": "21a135a84bcdb98aa1ffb655d5cbdaca",
+    "size": 15630464
+  },
+  {
+    "path": "explorer/dash_twins_payload.json",
+    "version_id": "mbfiGVcmB9thWuUMjDyqJd1e83l3g.V",
+    "etag": "156bc1fee0dd78b6152554880b02bd1b-5",
+    "size": 76742649
+  },
+  {
+    "path": "explorer/dash_twins_pca.pkl",
+    "version_id": "eseskceHs95C.Q.bGtRO6Q46NsIvp4j",
+    "etag": "b887e8cf4a995b8ddbe93d7c288015e6",
+    "size": 13080
+  },
+  {
+    "path": "explorer/dash_twins_umap.pkl",
+    "version_id": "Sxto7syCmPZc2I62ZzGuuvu9zHoR07w",
+    "etag": "153df66798a7c3e9cb729fd765cf1ae5",
+    "size": 16342825
+  },
+  {
     "path": "pre_trained_models/dash/agnosticZ/model_info.txt",
     "version_id": "w64QjSDtvyNS3jEo7oMKFb3mDNcaYqs",
     "etag": "942281ffb144ae02b3cbfea3153703ac",
