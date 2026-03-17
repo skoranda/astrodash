@@ -14,7 +14,7 @@ class ClassifyForm(forms.Form):
     file = forms.FileField(
         label="Upload Spectrum",
         required=False,
-        validators=[FileExtensionValidator(allowed_extensions=['txt', 'dat', 'ascii', 'csv', 'lnw', 'fits', 'flm'])],
+        validators=[FileExtensionValidator(allowed_extensions=['txt', 'dat', 'ascii', 'csv', 'lnw', 'fits', 'flm', 'spec'])],
         help_text="Upload a spectrum file (text format, two columns: wavelength and flux)"
     )
     
@@ -258,7 +258,7 @@ class BatchForm(forms.Form):
     files = MultipleFileField(
         label="Upload Multiple Files",
         required=False,
-        validators=[FileExtensionValidator(allowed_extensions=['txt', 'dat', 'ascii', 'csv', 'lnw', 'fits', 'flm'])],
+        validators=[FileExtensionValidator(allowed_extensions=['txt', 'dat', 'ascii', 'csv', 'lnw', 'fits', 'flm', 'spec'])],
         widget=MultipleFileInput(attrs={'multiple': True}),
         help_text="Select multiple spectrum files to upload."
     )
