@@ -9,10 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --upgrade pip
 
 # Install CPU-only PyTorch first
-RUN pip install --no-cache-dir \
-    torch==2.9.0+cpu \
-    torchvision==0.24.0+cpu \
-    --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir torch==2.9.0+cpu --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir torchvision==0.24.0
 
 # Install remaining dependencies
 COPY ./requirements.txt /requirements.txt

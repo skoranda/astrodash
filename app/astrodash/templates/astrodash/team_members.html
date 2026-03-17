@@ -1,0 +1,46 @@
+{% extends "astrodash/base.html" %}
+{% load static %}
+
+{% block title %}Team Members — Astrodash{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4 bg-white">
+  <h1 class="mb-4">Team Members</h1>
+
+  {% if not affiliations %}
+  <p class="text-muted">No team affiliations have been added yet. Add affiliations and members via the <a href="{% url 'admin:index' %}">admin</a>.</p>
+  {% else %}
+  <div class="row">
+    {% for affiliation in affiliations %}
+    <div class="col-lg-6 mb-5">
+      <h2 class="h3 font-weight-bold text-dark mb-4">{{ affiliation.name }}</h2>
+      {% for member in affiliation.members.all %}
+      <div class="team-member mb-4">
+        <h3 class="h5 font-weight-bold mb-2" style="color: #2a6496;">{{ member.name }}</h3>
+        <div class="d-flex flex-wrap">
+          {% if member.image %}
+          <div class="mr-3 mb-2">
+            <img
+              src="{% url 'astrodash:app_static_images' member.image %}"
+              alt="{{ member.name }}"
+              class="rounded"
+              style="width: 140px; height: 140px; object-fit: cover;"
+            />
+          </div>
+          {% endif %}
+          <div class="flex-grow-1">
+            {% if member.description %}
+            <p class="text-dark mb-0">{{ member.description|linebreaksbr }}</p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% empty %}
+      <p class="text-muted small">No members listed for this affiliation.</p>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

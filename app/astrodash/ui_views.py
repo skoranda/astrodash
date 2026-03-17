@@ -67,6 +67,16 @@ def landing_page(request):
     return render(request, 'astrodash/index.html')
 
 
+def team_members(request):
+    """
+    Renders the Team Members page: affiliations (labs/universities) with
+    members (picture, name, description), Blast-style layout.
+    """
+    from astrodash.models import TeamAffiliation
+    affiliations = TeamAffiliation.objects.prefetch_related("members").all()
+    return render(request, "astrodash/team_members.html", {"affiliations": affiliations})
+
+
 @xframe_options_sameorigin
 def dash_twins(request):
     """
