@@ -95,6 +95,8 @@ class FileSpectrumRepository(SpectrumRepository):
                 return self._read_csv_file(file_obj, filename)
             elif filename.lower().endswith('.fits'):
                 return self._read_fits_file(file_obj, filename)
+            elif filename.lower().endswith('.spec'):
+                return self._read_lris_spec_file(file_obj, filename)
             else:
                 logger.error(f"Unsupported file format: {filename}")
                 return None
@@ -212,6 +214,61 @@ class FileSpectrumRepository(SpectrumRepository):
 
         except Exception as e:
             logger.error(f"Error reading text file {filename}: {e}", exc_info=True)
+            return None
+
+    def _read_lris_spec_file(self, file_obj, filename: str) -> Optional[Spectrum]:
+        """Read Keck LRIS .spec file: FITS-style # header, then ## column header, then wavelen flux columns.
+        Parses only wavelength (col 0) and flux (col 1); filters 4000–9000 Å like other formats."""
+        try:
+            import re
+
+            if hasattr(file_obj, 'read'):
+                file_obj.seek(0)
+                content = file_obj.read()
+                if isinstance(content, bytes):
+                    content = content.decode('utf-8')
+            else:
+                with open(file_obj, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+            lines = content.splitlines()
+            spectrum_data = []
+
+            for line in lines:
+                line = line.strip()
+                # Skip header lines (all lines starting with #, including ## column names)
+                if not line or line.startswith('#'):
+                    continue
+                parts = re.split(r'\s+', line)
+                if len(parts) < 2:
+                    continue
+                try:
+                    wavelength = float(parts[0])
+                    flux = float(parts[1])
+                except ValueError:
+                    continue
+                if 4000.0 <= wavelength <= 9000.0:
+                    spectrum_data.append((wavelength, flux))
+
+            if not spectrum_data:
+                logger.error(f"No valid spectrum data in {filename} (after 4000-9000 Å filter)")
+                return None
+
+            spectrum_data.sort(key=lambda x: x[0])
+            wavelength = [x[0] for x in spectrum_data]
+            flux = [x[1] for x in spectrum_data]
+            spectrum_obj = Spectrum(x=wavelength, y=flux, file_name=filename)
+
+            try:
+                validate_spectrum(spectrum_obj.x, spectrum_obj.y, spectrum_obj.redshift)
+            except Exception as e:
+                logger.error(f"Spectrum validation failed for LRIS .spec file: {e}")
+                return None
+
+            return self.save(spectrum_obj)
+
+        except Exception as e:
+            logger.error(f"Error reading LRIS .spec file {filename}: {e}", exc_info=True)
             return None
 
     def _read_csv_file(self, file_obj, filename: str) -> Optional[Spectrum]:
