@@ -1,10 +1,10 @@
 from django.shortcuts import render
 from django.contrib import messages
-from django.conf import settings
 from django.http import HttpResponseRedirect, FileResponse, Http404, JsonResponse
 from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.urls import reverse
 from pathlib import Path
+from types import SimpleNamespace
 
 from astrodash.forms import ClassifyForm, BatchForm, ModelSelectionForm
 from astrodash.services import (
@@ -29,11 +29,13 @@ import base64
 import hashlib
 from django.core.files.uploadedfile import SimpleUploadedFile
 
-
 logger = get_logger(__name__)
 
 # Directory containing logo, favicon, etc. (app/astrodash/static/images/)
 APP_STATIC_IMAGES_DIR = Path(__file__).resolve().parent / "static" / "images"
+
+# File containing team member information.
+TEAM_MEMBERS_JSON = Path(__file__).resolve().parent / "data" / "team_members.json"
 
 # Safe MIME types for known extensions in that directory
 APP_STATIC_MIME = {
@@ -70,14 +72,47 @@ def landing_page(request):
     return render(request, 'astrodash/index.html')
 
 
+def _team_affiliations_from_json():
+    """Build affiliation/member objects for the template from data/team_members.json."""
+    raw = json.loads(TEAM_MEMBERS_JSON.read_text(encoding="utf-8"))
+    rows = raw.get("affiliations") or []
+    rows = sorted(rows, key=lambda a: (a.get("order", 0), a.get("name") or ""))
+    out = []
+    for aff in rows:
+        name = aff.get("name") or ""
+        aff_ns = SimpleNamespace(name=name)
+        members_in = sorted(
+            aff.get("members") or [],
+            key=lambda m: (m.get("order", 0), m.get("name") or ""),
+        )
+        aff_ns.members = [
+            SimpleNamespace(
+                name=m.get("name") or "",
+                description=(m.get("description") or "").strip(),
+                image=(m.get("image") or "").strip(),
+                affiliation=aff_ns,
+            )
+            for m in members_in
+        ]
+        out.append(aff_ns)
+    return out
+
+
 def team_members(request):
     """
     Renders the Team Members page: affiliations (labs/universities) with
     members (picture, name, description).
+
+    If ``data/team_members.json`` exists, it is the source of truth (good for
+    prod when admin is unavailable). Otherwise rows come from the database.
     """
-    from astrodash.models import TeamAffiliation
-    affiliations = TeamAffiliation.objects.prefetch_related("members").all()
-    return render(request, "astrodash/team_members.html", {"affiliations": affiliations})
+    if TEAM_MEMBERS_JSON.is_file():
+        affiliations = _team_affiliations_from_json()
+    return render(
+        request,
+        "astrodash/team_members.html",
+        {"affiliations": affiliations},
+    )
 
 
 @xframe_options_sameorigin
@@ -96,7 +131,8 @@ def dash_twins_data(request):
     """
     path = Path(get_config().data_dir) / "explorer" / "dash_twins_payload.json"
     if not path.is_file():
-        raise Http404("DASH Twins data not found. Run extract_payload.py --build-artifacts and ensure files are in ASTRODASH_DATA_DIR/explorer/.")
+        raise Http404("DASH Twins data not found. Run extract_payload.py --build-artifacts "
+                      "and ensure files are in ASTRODASH_DATA_DIR/explorer/.")
     return FileResponse(
         open(path, "rb"),
         content_type="application/json",
@@ -182,7 +218,8 @@ def model_selection(request):
                 model_file = request.FILES.get('model_file')
                 if not model_file:
                     logger.warning("Model upload attempted but no 'model_file' in request.FILES")
-                    messages.error(request, "No file was received. Ensure the form uses enctype='multipart/form-data' and you selected a file.")
+                    messages.error(request, "No file was received. Ensure the form uses enctype='multipart/form-data' "
+                                   "and you selected a file.")
                     return render(
                         request,
                         'astrodash/model_selection.html',
@@ -197,7 +234,7 @@ def model_selection(request):
                 input_shape = form.cleaned_data.get('input_shape')
                 model_name = form.cleaned_data.get('model_name')
                 model_description = form.cleaned_data.get('model_description')
-                
+
                 try:
                     model_service = get_model_service()
                     model_content = model_file.read()
@@ -221,7 +258,8 @@ def model_selection(request):
                     if model_info.get("validation_passed") is False:
                         messages.warning(
                             request,
-                            "Forward-pass validation failed (dummy run had a shape mismatch). You can still use this model for classification—real inputs may work."
+                            "Forward-pass validation failed (dummy run had a shape mismatch). You can still use this "
+                            "model for classification—real inputs may work."
                         )
 
                     # After upload, refresh the list of existing models and stay on this page
@@ -309,7 +347,7 @@ def model_selection(request):
                 # Store selected model type in session
                 request.session['selected_model_type'] = model_type
                 request.session.pop('selected_model_id', None)  # Clear any previous user model
-            
+
             # Redirect to the appropriate page
             if action_type == 'batch':
                 return HttpResponseRedirect(reverse('astrodash:batch_process_ui'))
@@ -331,6 +369,7 @@ def model_selection(request):
         'show_upload_section': show_upload_section,
     }
     return render(request, 'astrodash/model_selection.html', context)
+
 
 def classify(request):
     """
@@ -433,6 +472,9 @@ def classify(request):
                 plot_wave_max = request.session.get('classify_plot_wave_max')
                 show_templates_section = request.session.get('classify_show_templates_section', False)
                 formatted_results = request.session.get('classify_results', {'best_matches': []})
+                _annotate_best_match_template_variant_counts(formatted_results, show_templates_section)
+                request.session['classify_results'] = formatted_results
+                request.session.modified = True
                 display_model_type = request.session.get('classify_model_type', '')
                 element_lines_data = []
                 template_spectra_data = []
@@ -445,15 +487,7 @@ def classify(request):
                 if overlay_templates_get and show_templates_section:
                     template_svc = get_template_analysis_service()
                     for spec in overlay_templates_get:
-                        if not spec or '|' not in spec:
-                            continue
-                        sn_type, age_bin = spec.split('|', 1)
-                        try:
-                            wave, flux = template_svc.template_handler.get_template_spectrum(sn_type, age_bin)
-                            label = f"{sn_type} {age_bin}"
-                            template_spectra_data.append((label, wave, flux))
-                        except Exception:
-                            pass
+                        _append_template_overlay_from_spec(template_svc, spec, template_spectra_data)
                 plot_script, plot_div = _create_bokeh_plot(
                     processed,
                     element_lines=element_lines_data if element_lines_data else None,
@@ -551,7 +585,8 @@ def classify(request):
                     }
 
             previous_source_key = request.session.get('classify_input_source_key')
-            source_changed = bool(previous_source_key and current_source_key and current_source_key != previous_source_key)
+            source_changed = bool(
+                previous_source_key and current_source_key and current_source_key != previous_source_key)
             if source_changed:
                 params.update(default_params)
             request.session['classify_input_source_key'] = current_source_key
@@ -561,20 +596,20 @@ def classify(request):
                 spectrum_service = get_spectrum_service()
                 processing_service = get_spectrum_processing_service()
                 classification_service = get_classification_service()
-                
+
                 # 1. Read Spectrum
                 # If file is provided, use it. Otherwise use supernova_name (osc_ref)
                 spectrum = async_to_sync(spectrum_service.get_spectrum_data)(
-                    file=uploaded_file, 
+                    file=uploaded_file,
                     osc_ref=supernova_name
                 )
-                
+
                 # 2. Process Spectrum
                 processed = async_to_sync(processing_service.process_spectrum_with_params)(
                     spectrum=spectrum,
                     params=params,
                 )
-                
+
                 # 3. Classify
                 classification = async_to_sync(classification_service.classify_spectrum)(
                     spectrum=processed,
@@ -582,7 +617,7 @@ def classify(request):
                     user_model_id=selected_model_id,
                     params=params,
                 )
-                
+
                 # Wavelength range for plot customization (element lines, etc.)
                 plot_wave_min = float(min(processed.x)) if hasattr(processed, 'x') and len(processed.x) else None
                 plot_wave_max = float(max(processed.x)) if hasattr(processed, 'x') and len(processed.x) else None
@@ -598,9 +633,12 @@ def classify(request):
                 )
                 # Template overlays only available for DASH model (templates are DASH-specific)
                 show_templates_section = classification.model_type == 'dash'
+                _annotate_best_match_template_variant_counts(formatted_results, show_templates_section)
 
                 # Store DASH embedding in session for "Find Twins" (only when DASH and embedding present)
-                if classification.model_type == 'dash' and isinstance(classification.results.get('embedding'), list) and len(classification.results['embedding']) == 1024:
+                if (classification.model_type == 'dash'
+                        and isinstance(classification.results.get('embedding'), list)
+                        and len(classification.results['embedding']) == 1024):
                     request.session['classify_dash_embedding'] = classification.results['embedding']
                 else:
                     request.session.pop('classify_dash_embedding', None)
@@ -626,7 +664,7 @@ def classify(request):
 
                 # Overlay state from POST (when user clicked Apply in Customize modal), else empty
                 overlay_elements = request.POST.getlist('overlay_elements') or []
-                overlay_templates = request.POST.getlist('overlay_templates') or []  # each item "sn_type|age_bin"
+                overlay_templates = request.POST.getlist('overlay_templates') or []  # sn_type|age_bin or |variant_index
 
                 # Build overlay data and plot
                 element_lines_data = []
@@ -643,15 +681,7 @@ def classify(request):
                     if overlay_templates and show_templates_section:
                         template_svc = get_template_analysis_service()
                         for spec in overlay_templates:
-                            if not spec or '|' not in spec:
-                                continue
-                            sn_type, age_bin = spec.split('|', 1)
-                            try:
-                                wave, flux = template_svc.template_handler.get_template_spectrum(sn_type, age_bin)
-                                label = f"{sn_type} {age_bin}"
-                                template_spectra_data.append((label, wave, flux))
-                            except Exception:
-                                pass
+                            _append_template_overlay_from_spec(template_svc, spec, template_spectra_data)
 
                 # 4. Generate Plot (with overlays if any)
                 plot_script, plot_div = _create_bokeh_plot(
@@ -697,7 +727,7 @@ def classify(request):
                             c for c in replacement_form.fields['model'].choices if c[0] != 'user_uploaded'
                         ]
                     context['form'] = replacement_form
-                
+
             except AppException as e:
                 messages.error(request, f"Processing Error: {e.message}")
             except Exception as e:
@@ -709,8 +739,6 @@ def classify(request):
             )
     return render(request, 'astrodash/classify.html', context)
 
-
-from astrodash.services import get_batch_processing_service
 
 def batch_process(request):
     """
@@ -759,14 +787,14 @@ def batch_process(request):
                     }
 
                     logger.info(
-                        "Batch UI parameters: smoothing=%s, minWave=%s, maxWave=%s, knownZ=%s, zValue=%s, calculateRlap=%s, modelType=%s",
-                        params['smoothing'],
-                        params['minWave'],
-                        params['maxWave'],
-                        params['knownZ'],
-                        params['zValue'],
-                        params['calculateRlap'],
-                        params['modelType'],
+                        "Batch UI parameters: "
+                        f'''smoothing={params['smoothing']} '''
+                        f'''minWave={params['minWave']} '''
+                        f'''maxWave={params['maxWave']} '''
+                        f'''knownZ={params['knownZ']} '''
+                        f'''zValue={params['zValue']} '''
+                        f'''calculateRlap={params['calculateRlap']} '''
+                        f'''modelType={params['modelType']} '''
                     )
 
                     batch_service = get_batch_processing_service()
@@ -811,6 +839,7 @@ def batch_process(request):
 
     return render(request, 'astrodash/batch.html', context)
 
+
 def _format_batch_results(results, params):
     """
     Format batch results for display in the template.
@@ -818,7 +847,7 @@ def _format_batch_results(results, params):
     formatted = {}
     for filename, result in results.items():
         formatted_item = {}
-        
+
         # Check for error
         if result.get('error'):
             formatted_item['error'] = result['error']
@@ -826,24 +855,78 @@ def _format_batch_results(results, params):
             # Extract classification data
             classification = result.get('classification', {})
             best_match = classification.get('best_match', {})
-            
+
             formatted_item['type'] = best_match.get('type', '-')
             formatted_item['age'] = best_match.get('age', '-')
-            
+
             prob = best_match.get('probability')
             formatted_item['probability'] = f"{prob:.4f}" if prob is not None else '-'
-            
+
             formatted_item['redshift'] = best_match.get('redshift', '-')
-            
+
             # RLAP only for Dash model and if requested
             if params.get('modelType') == 'dash' and params.get('calculateRlap'):
                 formatted_item['rlap'] = best_match.get('rlap', '-')
             else:
-                 formatted_item['rlap'] = '-'
-                 
+                formatted_item['rlap'] = '-'
+
         formatted[filename] = formatted_item
-        
+
     return formatted
+
+
+def _parse_overlay_template_spec(spec: str):
+    """
+    Parse overlay_templates entry: 'sn_type|age_bin' or 'sn_type|age_bin|variant_index'.
+    If the last segment is all digits, it is treated as a 0-based variant index.
+    """
+    if not spec or '|' not in spec:
+        return None
+    parts = spec.split('|')
+    if len(parts) < 2:
+        return None
+    last = parts[-1]
+    if last.isdigit():
+        sn_type = parts[0]
+        age_bin = '|'.join(parts[1:-1])
+        variant_index = int(last)
+        return sn_type, age_bin, variant_index
+    return parts[0], '|'.join(parts[1:]), 0
+
+
+def _append_template_overlay_from_spec(template_svc, spec, template_spectra_data):
+    parsed = _parse_overlay_template_spec(spec)
+    if not parsed:
+        return
+    sn_type, age_bin, variant_index = parsed
+    try:
+        wave, flux = template_svc.template_handler.get_template_spectrum(
+            sn_type, age_bin, variant_index=variant_index
+        )
+        label = f"{sn_type} {age_bin}"
+        if variant_index:
+            label = f"{label} (#{variant_index + 1})"
+        template_spectra_data.append((label, wave, flux))
+    except Exception:
+        pass
+
+
+def _annotate_best_match_template_variant_counts(results: dict, enabled: bool) -> None:
+    """Attach template_variant_count to each best match (DASH snInfo row count)."""
+    matches = results.get('best_matches') or []
+    if not matches:
+        return
+    if not enabled:
+        return
+    template_svc = get_template_analysis_service()
+    handler = template_svc.template_handler
+    for m in matches:
+        try:
+            n = handler.get_template_variant_count(m['type'], m['age'])
+            m['template_variant_count'] = max(1, int(n))
+        except Exception:
+            m['template_variant_count'] = 1
+
 
 # Colors for element-line and template overlays (consistent palette)
 _PLOT_OVERLAY_COLORS = [
@@ -941,12 +1024,13 @@ def _create_bokeh_plot(spectrum, element_lines=None, template_spectra=None, wave
 
     return components(p)
 
+
 def _format_results(results):
     """
     Format results for display in the template to avoid filter issues.
     """
     formatted_matches = []
-    
+
     # helper to get attributes from dict or object
     def get_attr(obj, attr, default=None):
         if isinstance(obj, dict):
@@ -955,21 +1039,21 @@ def _format_results(results):
 
     # Check if results has best_matches
     best_matches = get_attr(results, 'best_matches', [])
-    
+
     for match in best_matches:
         # Create a dict representation
         match_dict = {}
-        
+
         # Extract fields needed for template
         for field in ['type', 'age', 'probability', 'redshift', 'reliable']:
             match_dict[field] = get_attr(match, field)
-            
+
         # Add formatted probability
         if match_dict['probability'] is not None:
-             match_dict['formatted_probability'] = f"{match_dict['probability']:.4f}"
+            match_dict['formatted_probability'] = f"{match_dict['probability']:.4f}"
         else:
-             match_dict['formatted_probability'] = ""
+            match_dict['formatted_probability'] = ""
 
         formatted_matches.append(match_dict)
-        
+
     return {'best_matches': formatted_matches}
