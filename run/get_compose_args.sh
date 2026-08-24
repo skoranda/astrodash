@@ -5,7 +5,20 @@ PROFILE=$1
 PURGE_OPTION=$2
 
 ENV_FILE="env/.env.dev"
-TARGET_SERVICE="app_dev"
+# The compose project defines one application service, named `app`, on every
+# profile. This is not a per-profile value and must not become one again: it
+# was `app_dev` here for profiles whose service has never had that name, so
+# every `exec` this helper produced failed with "service is not running".
+TARGET_SERVICE="app"
+# The per-profile overlay `astrodashctl` layers over the base compose file.
+# Without it the dev bind-mount, the dev-only services, and the profile's own
+# container names are all absent, so this helper described a different stack
+# from the one `astrodashctl up` actually starts.
+OVERLAY_FILE="docker-compose.dev.yaml"
+# Project names must match `astrodashctl` exactly, or this helper addresses a
+# project that has nothing running in it. A pre-set value still wins, so a
+# caller can point at a project of their own.
+PROJECT_NAME="astrodash-dev"
 COMPOSE_ARGS=""
 case "$PROFILE" in
   "")
@@ -13,20 +26,27 @@ case "$PROFILE" in
     exit 1
     ;;
   ci)
-    TARGET_SERVICE="app_ci"
     ENV_FILE="env/.env.ci"
-    COMPOSE_ARGS="--build --exit-code-from app_ci"
+    OVERLAY_FILE="docker-compose.ci.yaml"
+    PROJECT_NAME="astrodash-ci"
+    COMPOSE_ARGS="--build --exit-code-from app"
     ;;
   slim_dev)
     COMPOSE_ARGS="--build --abort-on-container-exit"
     ;;
   slim_prod | full_prod)
-    TARGET_SERVICE="app"
+    ENV_FILE="env/.env.prod"
+    OVERLAY_FILE="docker-compose.prod.yaml"
+    PROJECT_NAME="astrodash-prod"
+    ;;
+  docs)
+    OVERLAY_FILE="docker-compose.docs.yaml"
     ;;
   *)
     COMPOSE_ARGS="--build"
     ;;
 esac
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$PROJECT_NAME}"
 
 PURGE_VOLUMES=""
 case "${PURGE_OPTION}" in
@@ -39,12 +59,12 @@ case "${PURGE_OPTION}" in
   ;;
   "--purge-db")
     COMPOSE_ARGS=""
-    PURGE_VOLUMES="${COMPOSE_PROJECT_NAME:-astrodash}_astrodash-db ${COMPOSE_PROJECT_NAME:-astrodash}_django-static"
+    PURGE_VOLUMES="${COMPOSE_PROJECT_NAME}_astrodash-db ${COMPOSE_PROJECT_NAME}_django-static"
     echo "Purging Django database and static file volumes..."
   ;;
   "--purge-data")
     COMPOSE_ARGS=""
-    PURGE_VOLUMES="${COMPOSE_PROJECT_NAME:-astrodash}_astrodash-data"
+    PURGE_VOLUMES="${COMPOSE_PROJECT_NAME}_astrodash-data"
     echo "Purging astro data volume..."
   ;;
   *)
@@ -54,16 +74,20 @@ case "${PURGE_OPTION}" in
 esac
 
 COMPOSE_CONFIG=" --profile $PROFILE"
-COMPOSE_CONFIG="${COMPOSE_CONFIG} --project-name ${COMPOSE_PROJECT_NAME:-astrodash}"
+COMPOSE_CONFIG="${COMPOSE_CONFIG} --project-name ${COMPOSE_PROJECT_NAME}"
 if [[ $PROFILE == "docs" ]]; then
-  COMPOSE_CONFIG="${COMPOSE_CONFIG} -f docker/docker-compose.docs.yaml"
+  COMPOSE_CONFIG="${COMPOSE_CONFIG} -f docker/${OVERLAY_FILE}"
 else
+  # Base first, overlay second -- the same order and the same pair
+  # `astrodashctl` uses, so both address one stack rather than two.
   COMPOSE_CONFIG="${COMPOSE_CONFIG} -f docker/docker-compose.yml"
+  COMPOSE_CONFIG="${COMPOSE_CONFIG} -f docker/${OVERLAY_FILE}"
   COMPOSE_CONFIG="${COMPOSE_CONFIG} --env-file env/.env.default"
   COMPOSE_CONFIG="${COMPOSE_CONFIG} --env-file ${ENV_FILE}"
 fi
 
 export COMPOSE_CONFIG
 export COMPOSE_ARGS
+export COMPOSE_PROJECT_NAME
 export PURGE_VOLUMES
 export TARGET_SERVICE
