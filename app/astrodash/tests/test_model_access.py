@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from astrodash.core import gate_config, model_access
@@ -111,7 +111,14 @@ class EntryLinkTokenTests(TestCase):
             gate_config.CREDENTIAL_ENV_VAR: GATE_CREDENTIAL,
             gate_config.LINK_TTL_ENV_VAR: "3600",
         }
-        with patch.dict(os.environ, env):
+        # The key is pinned rather than inherited. Relying on the ambient one
+        # made this pass only where no real key was configured -- so it failed
+        # for any developer who had configured a local gate, and would have
+        # failed on any deployment that has a real key. That is the opposite of
+        # what a guard should do.
+        with patch.dict(os.environ, env), override_settings(
+            SECRET_KEY="django-insecure-committed-default"
+        ):
             with self.assertRaises(model_access.GateNotConfigured):
                 model_access.mint_entry_link("dash")
 
